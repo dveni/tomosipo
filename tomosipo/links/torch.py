@@ -95,7 +95,7 @@ class TorchLink(Link):
         if self._data.is_cuda:
             z, y, x = self._data.shape
             pitch = x * 4  # we assume 4 byte float32 values
-            link = astra.data3d.GPULink(self._data.data_ptr(), x, y, z, pitch)
+            link = astra.pythonutils.GPULink(self._data.data_ptr(), x, y, z, pitch)
             return link
         else:
             # The torch tensor may be part of the computation
