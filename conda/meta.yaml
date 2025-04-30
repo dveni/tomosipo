@@ -29,7 +29,7 @@ requirements:
 
     run:
         - python >=3.6
-        - astra-toolbox >=2.0
+        - astra-toolbox >=2.0,!=2.3.0
         - numpy >=1.21
 
 about:
