@@ -13,6 +13,19 @@ Versioning](https://semver.org/spec/v2.0.0.html) when it reaches version 1.0.
 ### Deprecated
 ### Security
 
+## [0.7.0] - 2025-04-30
+### Added
+- New AutogradOperator for easier autograd support
+- Numpy 2 compatibility
+### Fixed
+- Removed astra-toolbox 2.3.0 support from package metadata
+- Improved Monai interoperability of to_autograd
+- Fix copy semantics with NumPy 2
+- Fix print options with NumPy 2
+- Fixed wrong dimensions in learned_pd example code
+- Fix positional args passed to kwarg-only function (VolumeGeometry.\_\_init\_\_)
+- Fix error message in AssertionError in OperatorFunction
+
 ## [0.6.0] - 2022-08-02
 ### Added
 - References and links to ts_algorithms were added to the readme
@@ -148,7 +161,8 @@ This is a major release. It introduces two features that define tomosipo in its 
 
 
 
-[Unreleased]: https://github.com/ahendriksen/tomosipo/compare/v0.6.0...develop
+[Unreleased]: https://github.com/ahendriksen/tomosipo/compare/v0.7.0...develop
+[0.7.0]: https://github.com/ahendriksen/tomosipo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ahendriksen/tomosipo/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/ahendriksen/tomosipo/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/ahendriksen/tomosipo/compare/v0.4.1...v0.5.0

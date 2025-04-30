@@ -5,7 +5,7 @@
 __author__ = """Allard Hendriksen"""
 __email__ = "allard.hendriksen@cwi.nl"
 # Also edit the version in setup.py!
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 from .Operator import operator
 from .Data import data
