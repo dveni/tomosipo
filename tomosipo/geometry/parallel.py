@@ -185,6 +185,20 @@ class ParallelGeometry(ProjectionGeometry):
 
         return parallel(angles=np.copy(angles), shape=shape, size=size)
 
+    def to_astra_2d(self):
+        """Return a 2D ASTRA parallel-beam projection geometry.
+
+        Used for slice-by-slice projection with 2D CUDA operators.
+
+        :returns: A 2D ASTRA parallel projection geometry dict.
+        :rtype: dict
+        """
+        _, col_count = self.det_shape
+        det_spacing = np.array(self._size) / np.array(self.det_shape)
+        return astra.create_proj_geom(
+            'parallel', det_spacing[1], col_count, np.copy(self._angles)
+        )
+
     def to_vec(self):
         """Return a vector geometry of the current geometry
 

@@ -5,6 +5,8 @@ from tomosipo.astra import (
     create_astra_projector,
     direct_fp,
     direct_bp,
+    fp_2d_slice,
+    bp_2d_slice,
 )
 
 
@@ -370,3 +372,251 @@ class BackprojectionOperator:
     def range_shape(self):
         """The expected shape of the output (volume) data"""
         return self.parent.domain_shape
+
+
+###############################################################################
+#                       2D Slice-based Operator                               #
+###############################################################################
+
+
+def _to_numpy(x):
+    """Convert input to a numpy array (handles Data, torch.Tensor, np.ndarray)."""
+    if isinstance(x, Data):
+        return np.ascontiguousarray(x.data, dtype=np.float32)
+    try:
+        import torch
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy().astype(np.float32)
+    except ImportError:
+        pass
+    return np.ascontiguousarray(x, dtype=np.float32)
+
+
+def _result_like(input_val, result_np, geometry):
+    """Return result in the same type as input (Data, torch.Tensor, or np.ndarray)."""
+    if isinstance(input_val, Data):
+        return ts.data(geometry, result_np)
+    try:
+        import torch
+        if isinstance(input_val, torch.Tensor):
+            result_tensor = torch.from_numpy(result_np)
+            return result_tensor.to(device=input_val.device, dtype=torch.float32)
+    except ImportError:
+        pass
+    return result_np
+
+
+def operator_2d(
+    volume_geometry,
+    projection_geometry,
+    voxel_supersampling=1,
+    detector_supersampling=1,
+    additive=False,
+):
+    """Create a 2D slice-based tomographic operator
+
+    This operator uses ASTRA's 2D CUDA operators (FP_CUDA / BP_CUDA)
+    instead of 3D CUDA operators, bypassing the 3D CUDA texture size
+    limits. It processes the volume slice-by-slice along the Z axis.
+
+    This is exact for parallel-beam geometries (slices are independent).
+    Only parallel-beam geometries are supported.
+
+    Parameters
+    ----------
+    volume_geometry: `VolumeGeometry`
+        The domain of the operator.
+
+    projection_geometry: `ParallelGeometry` or `ParallelVectorGeometry`
+        The range of the operator. Must be a parallel-beam geometry.
+
+    voxel_supersampling: `int` (optional)
+        Specifies the amount of voxel supersampling. Default is 1.
+
+    detector_supersampling: `int` (optional)
+        Specifies the amount of detector supersampling. Default is 1.
+
+    additive: `bool` (optional)
+        If True, the operator adds instead of overwrites. Default is False.
+
+    Returns
+    -------
+    Operator2D
+        A 2D slice-based tomographic operator.
+    """
+    return Operator2D(
+        volume_geometry,
+        projection_geometry,
+        voxel_supersampling=voxel_supersampling,
+        detector_supersampling=detector_supersampling,
+        additive=additive,
+    )
+
+
+class Operator2D:
+    """A 2D slice-based tomographic operator
+
+    Uses ASTRA's 2D CUDA operators (FP_CUDA / BP_CUDA) to process
+    a 3D volume slice-by-slice along the Z axis. This bypasses the
+    3D CUDA texture size limits.
+
+    Only parallel-beam geometries are supported (slices are independent
+    in parallel-beam CT).
+    """
+
+    def __init__(
+        self,
+        volume_geometry,
+        projection_geometry,
+        voxel_supersampling=1,
+        detector_supersampling=1,
+        additive=False,
+    ):
+        """Create a 2D slice-based tomographic operator
+
+        Parameters
+        ----------
+        volume_geometry: `VolumeGeometry`
+            The domain of the operator.
+
+        projection_geometry: `ParallelGeometry` or `ParallelVectorGeometry`
+            The range of the operator.
+
+        voxel_supersampling: `int` (optional)
+            Specifies the amount of voxel supersampling. Default is 1.
+
+        detector_supersampling: `int` (optional)
+            Specifies the amount of detector supersampling. Default is 1.
+
+        additive: `bool` (optional)
+            If True, adds to existing data. Default is False.
+        """
+        super(Operator2D, self).__init__()
+
+        if not ts.geometry.is_parallel(projection_geometry):
+            raise ValueError(
+                f"Operator2D only supports parallel-beam projection geometries. "
+                f"Got: {type(projection_geometry).__name__}. "
+                f"Use ts.operator() for cone-beam geometries."
+            )
+
+        self.volume_geometry = volume_geometry
+        self.projection_geometry = projection_geometry
+        self.voxel_supersampling = voxel_supersampling
+        self.detector_supersampling = detector_supersampling
+        self.additive = additive
+
+        vg, pg = to_astra_compatible_operator_geometry(
+            volume_geometry, projection_geometry
+        )
+        self.astra_compat_vg = vg
+        self.astra_compat_pg = pg
+
+        # Pre-compute 2D ASTRA geometries
+        self._vol_geom_2d = vg.to_astra_2d()
+        self._proj_geom_2d = pg.to_astra_2d()
+
+        self._transpose = BackprojectionOperator(self)
+
+    def _fp(self, volume, out=None):
+        """Forward project slice-by-slice using FP_CUDA."""
+        vol_np = _to_numpy(volume)
+        Z = vol_np.shape[0]
+
+        if out is not None:
+            sino_np = _to_numpy(out)
+        else:
+            sino_shape = self.range_shape
+            if self.additive:
+                sino_np = np.zeros(sino_shape, dtype=np.float32)
+            else:
+                sino_np = np.empty(sino_shape, dtype=np.float32)
+
+        for z in range(Z):
+            slice_sino = fp_2d_slice(
+                vol_np[z],
+                self._proj_geom_2d,
+                self._vol_geom_2d,
+                detector_supersampling=self.detector_supersampling,
+            )
+            if self.additive:
+                sino_np[z] += slice_sino
+            else:
+                sino_np[z] = slice_sino
+
+        if out is not None and isinstance(volume, Data):
+            out.data[:] = sino_np
+            return out
+
+        return _result_like(volume, sino_np, self.projection_geometry)
+
+    def _bp(self, projection, out=None):
+        """Backproject slice-by-slice using BP_CUDA."""
+        sino_np = _to_numpy(projection)
+        Z = sino_np.shape[0]
+
+        if out is not None:
+            vol_np = _to_numpy(out)
+        else:
+            vol_shape = self.domain_shape
+            if self.additive:
+                vol_np = np.zeros(vol_shape, dtype=np.float32)
+            else:
+                vol_np = np.empty(vol_shape, dtype=np.float32)
+
+        for z in range(Z):
+            slice_bp = bp_2d_slice(
+                sino_np[z],
+                self._proj_geom_2d,
+                self._vol_geom_2d,
+                voxel_supersampling=self.voxel_supersampling,
+            )
+            if self.additive:
+                vol_np[z] += slice_bp
+            else:
+                vol_np[z] = slice_bp
+
+        if out is not None and isinstance(projection, Data):
+            out.data[:] = vol_np
+            return out
+
+        return _result_like(projection, vol_np, self.volume_geometry)
+
+    def __call__(self, volume, out=None):
+        """Apply forward projection
+
+        :param volume: `np.array`, `torch.Tensor`, or `Data`
+            An input volume.
+        :param out: (optional) output buffer.
+        :returns: forward projected sinogram data.
+        """
+        return self._fp(volume, out)
+
+    def transpose(self):
+        """Return backprojection operator"""
+        return self._transpose
+
+    @property
+    def T(self):
+        """The transpose (backprojection) operator."""
+        return self.transpose()
+
+    @property
+    def domain(self):
+        """The domain (volume geometry) of the operator"""
+        return self.volume_geometry
+
+    @property
+    def range(self):
+        """The range (projection geometry) of the operator"""
+        return self.projection_geometry
+
+    @property
+    def domain_shape(self):
+        """The expected shape of the input (volume) data"""
+        return ts.links.geometry_shape(self.astra_compat_vg)
+
+    @property
+    def range_shape(self):
+        """The expected shape of the output (projection) data"""
+        return ts.links.geometry_shape(self.astra_compat_pg)

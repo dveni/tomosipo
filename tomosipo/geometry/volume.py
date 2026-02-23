@@ -301,6 +301,19 @@ class VolumeGeometry:
         e = self.extent
         return astra.create_vol_geom(v[1], v[2], v[0], *e[2], *e[1], *e[0])
 
+    def to_astra_2d(self):
+        """Return a 2D ASTRA volume geometry (single Y×X slice).
+
+        Used for slice-by-slice projection with 2D CUDA operators.
+
+        :returns: A 2D ASTRA volume geometry dict.
+        :rtype: dict
+        """
+        v = self.shape   # (Z, Y, X)
+        e = self.extent  # ((minZ,maxZ), (minY,maxY), (minX,maxX))
+        # astra.create_vol_geom(Y, X, minx, maxx, miny, maxy)
+        return astra.create_vol_geom(v[1], v[2], *e[2], *e[1])
+
     def to_vec(self):
         """Returns a vector representation of the volume
 

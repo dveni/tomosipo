@@ -24,6 +24,7 @@ projector and passes it to ASTRA, which performs an all-to-all (back)projection.
 
 """
 import astra
+import numpy as np
 import tomosipo as ts
 
 
@@ -404,3 +405,84 @@ def fdk(vol_data, proj_data, *, voxel_supersampling=1, detector_supersampling=1)
     astra.experimental.accumulate_FDK(
         projector, vol_data.to_astra(), proj_data.to_astra()
     )
+
+
+###############################################################################
+#                        2D CUDA projection functions                         #
+###############################################################################
+def fp_2d_slice(vol_slice_np, proj_geom_2d, vol_geom_2d,
+                detector_supersampling=1):
+    """Forward-project a single 2D slice using FP_CUDA.
+
+    Parameters
+    ----------
+    vol_slice_np : np.ndarray
+        Volume slice, shape (Y, X), dtype float32.
+    proj_geom_2d : dict
+        ASTRA 2D projection geometry.
+    vol_geom_2d : dict
+        ASTRA 2D volume geometry.
+    detector_supersampling : int
+        Detector supersampling factor. Default is 1.
+
+    Returns
+    -------
+    sinogram : np.ndarray
+        Sinogram, shape (N_angles, U), dtype float32.
+    """
+    vol_slice_np = np.ascontiguousarray(vol_slice_np, dtype=np.float32)
+    vol_id = astra.data2d.link('-vol', vol_geom_2d, vol_slice_np)
+    sino_id = astra.data2d.create('-sino', proj_geom_2d)
+
+    cfg = astra.astra_dict('FP_CUDA')
+    cfg['ProjectionDataId'] = sino_id
+    cfg['VolumeDataId'] = vol_id
+    if detector_supersampling > 1:
+        cfg['option'] = {'DetectorSuperSampling': detector_supersampling}
+
+    alg_id = astra.algorithm.create(cfg)
+    astra.algorithm.run(alg_id)
+    sinogram = astra.data2d.get(sino_id)
+
+    astra.algorithm.delete(alg_id)
+    astra.data2d.delete([vol_id, sino_id])
+    return sinogram
+
+
+def bp_2d_slice(sino_slice_np, proj_geom_2d, vol_geom_2d,
+                voxel_supersampling=1):
+    """Backproject a single sinogram row using BP_CUDA.
+
+    Parameters
+    ----------
+    sino_slice_np : np.ndarray
+        Sinogram row, shape (N_angles, U), dtype float32.
+    proj_geom_2d : dict
+        ASTRA 2D projection geometry.
+    vol_geom_2d : dict
+        ASTRA 2D volume geometry.
+    voxel_supersampling : int
+        Voxel supersampling factor. Default is 1.
+
+    Returns
+    -------
+    vol_slice : np.ndarray
+        Reconstructed slice, shape (Y, X), dtype float32.
+    """
+    sino_slice_np = np.ascontiguousarray(sino_slice_np, dtype=np.float32)
+    sino_id = astra.data2d.link('-sino', proj_geom_2d, sino_slice_np)
+    vol_id = astra.data2d.create('-vol', vol_geom_2d)
+
+    cfg = astra.astra_dict('BP_CUDA')
+    cfg['ProjectionDataId'] = sino_id
+    cfg['ReconstructionDataId'] = vol_id
+    if voxel_supersampling > 1:
+        cfg['option'] = {'PixelSuperSampling': voxel_supersampling}
+
+    alg_id = astra.algorithm.create(cfg)
+    astra.algorithm.run(alg_id)
+    vol_slice = astra.data2d.get(vol_id)
+
+    astra.algorithm.delete(alg_id)
+    astra.data2d.delete([sino_id, vol_id])
+    return vol_slice

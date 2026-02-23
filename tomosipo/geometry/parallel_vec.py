@@ -2,6 +2,7 @@
 
 """
 
+import astra
 import numpy as np
 import tomosipo as ts
 from typing import Union
@@ -214,6 +215,28 @@ class ParallelVectorGeometry(ProjectionGeometry):
             det_v=det_v[:, ::-1],
             det_u=det_u[:, ::-1],
         )
+
+    def to_astra_2d(self):
+        """Return a 2D ASTRA parallel-beam vector projection geometry.
+
+        Extracts the (X, Y) components from the 3D (Z, Y, X) vectors
+        to produce a geometry suitable for 2D CUDA operators.
+
+        :returns: A 2D ASTRA parallel_vec projection geometry dict.
+        :rtype: dict
+
+        """
+        _, col_count = self.det_shape
+        # ASTRA 2D parallel_vec format: (rayX, rayY, dX, dY, uX, uY)
+        # Internal format is (Z, Y, X), so X=idx2, Y=idx1
+        vectors = np.zeros((self.num_angles, 6))
+        vectors[:, 0] = self._ray_dir[:, 2]           # rayX
+        vectors[:, 1] = self._ray_dir[:, 1]           # rayY
+        vectors[:, 2] = self._det_vec.det_pos[:, 2]   # dX
+        vectors[:, 3] = self._det_vec.det_pos[:, 1]   # dY
+        vectors[:, 4] = self._det_vec.det_u[:, 2]     # uX
+        vectors[:, 5] = self._det_vec.det_u[:, 1]     # uY
+        return astra.create_proj_geom('parallel_vec', col_count, vectors)
 
     def to_vec(self):
         """Return a vector geometry of the current geometry

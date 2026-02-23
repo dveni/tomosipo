@@ -215,7 +215,8 @@ class AutogradOperator():
         self,
         operator,
         num_extra_dims=0,
-        is_2d=False
+        is_2d=False,
+        use_2d_cuda=False,
     ):
         """
         Create an operator with autograd support from an existing tomosipo
@@ -223,7 +224,7 @@ class AutogradOperator():
 
         Parameters
         ----------
-        operator: `Operator`
+        operator: `Operator` or `Operator2D`
             Tomosipo operator whose behavior will be mimicked
 
         num_extra_dims : `int` (optional)
@@ -234,12 +235,18 @@ class AutogradOperator():
         is_2d : `bool` (optional)
             Whether to remove the first dimension of the operator, resulting in
             a 2D operator. The default is False.
+
+        use_2d_cuda : `bool` (optional)
+            Whether to use ASTRA's 2D CUDA operators (FP_CUDA/BP_CUDA) instead
+            of 3D operators, bypassing 3D CUDA texture size limits. Only
+            parallel-beam geometries are supported. The default is False.
         """
 
         if operator.additive:
             raise ValueError("Additive operators are not supported")
 
         self.operator = operator
+        self.use_2d_cuda = use_2d_cuda
         self._fp_op = to_autograd(operator, num_extra_dims, is_2d)
         self._bp_op = to_autograd(operator.T, num_extra_dims, is_2d)
         self._transpose = BackprojectionOperator(self)
@@ -320,7 +327,7 @@ class AutogradOperator():
 
 
 def autograd_operator(volume_geometry, projection_geometry, voxel_supersampling=1, detector_supersampling=1,
-                      num_extra_dims=0, is_2d=False):
+                      num_extra_dims=0, is_2d=False, use_2d_cuda=False):
     """
     Create a tomographic operator with PyTorch autograd support.
 
@@ -350,6 +357,11 @@ def autograd_operator(volume_geometry, projection_geometry, voxel_supersampling=
         Whether to remove the first dimension of the operator, resulting in a
         2D operator. The default is False.
 
+    use_2d_cuda : `bool` (optional)
+        Whether to use ASTRA's 2D CUDA operators (FP_CUDA/BP_CUDA) instead
+        of 3D operators, bypassing 3D CUDA texture size limits. Only
+        parallel-beam geometries are supported. The default is False.
+
     Returns
     -------
     `AutogradOperator`
@@ -357,14 +369,23 @@ def autograd_operator(volume_geometry, projection_geometry, voxel_supersampling=
 
     """
 
-    op = ts.operator(
-        volume_geometry=volume_geometry,
-        projection_geometry=projection_geometry,
-        voxel_supersampling=voxel_supersampling,
-        detector_supersampling=detector_supersampling
-    )
+    if use_2d_cuda:
+        op = ts.operator_2d(
+            volume_geometry=volume_geometry,
+            projection_geometry=projection_geometry,
+            voxel_supersampling=voxel_supersampling,
+            detector_supersampling=detector_supersampling
+        )
+    else:
+        op = ts.operator(
+            volume_geometry=volume_geometry,
+            projection_geometry=projection_geometry,
+            voxel_supersampling=voxel_supersampling,
+            detector_supersampling=detector_supersampling
+        )
     return AutogradOperator(
         operator=op,
         num_extra_dims=num_extra_dims,
-        is_2d=is_2d
+        is_2d=is_2d,
+        use_2d_cuda=use_2d_cuda,
     )
